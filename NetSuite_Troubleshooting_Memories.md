@@ -222,6 +222,82 @@ ediErrorRecord.setValue({
 });
 ```
 
+## Error Handling Best Practices
+
+### Centralized Error Handling Pattern
+**Pattern**: Handle errors where they occur, avoid error bubbling
+```javascript
+// DON'T do this (causes duplicate error records)
+try {
+    // some code
+} catch (error) {
+    createEDIErrorRecord(recordId, error.message);
+    throw error; // This causes bubbling and duplicate error records
+}
+
+// DO this instead (handles error locally)
+try {
+    // some code
+} catch (error) {
+    createEDIErrorRecord(recordId, error.message);
+    return { success: false, error: error.message }; // No bubbling
+}
+```
+
+### Scheduled Script URL Generation
+**Problem**: `url.resolveScript()` generates relative URLs that fail HTTPS requests
+**Solution**: Build fully qualified URLs manually
+```javascript
+// DON'T do this
+const suiteletUrl = url.resolveScript({
+    scriptId: 'customscript_retrieve_and_attach_pods',
+    deploymentId: 'customdeploy_retrieve_and_attach_pods',
+    params: { tracking: trackingNumber, recordId: recordId }
+});
+
+// DO this instead
+const baseUrl = 'https://6448561.app.netsuite.com';
+const suiteletUrl = `${baseUrl}/app/site/hosting/scriptlet.nl?script=2844&deploy=1&compid=6448561&tracking=${encodeURIComponent(trackingNumber)}&recordId=${recordId}`;
+```
+
+### Saved Search Deduplication
+**Problem**: Saved searches with joins return duplicate records
+**Solution**: Use Set to track processed IDs
+```javascript
+const processedPackageIds = new Set();
+
+for (let i = 0; i < searchResultRange.length; i++) {
+    const recordId = searchResultRange[i].id;
+    
+    if (processedPackageIds.has(recordId)) {
+        log.audit('Debug', `Skipping duplicate package ${recordId}`);
+        continue;
+    }
+    
+    processedPackageIds.add(recordId);
+    // Process the package
+}
+```
+
+### Logging Method Issues
+**Problem**: NetSuite doesn't support `log.warning` or `log.warn`
+**Solution**: Use `log.audit` for warnings
+```javascript
+// DON'T do this
+log.warning('Message'); // Not supported
+log.warn('Message');    // Not supported
+
+// DO this instead
+log.audit('Warning', 'Message');
+```
+
+### Field Name Validation
+**Pattern**: Always verify field names in NetSuite before using in scripts
+**Common Issues**:
+- `custrecord_tracking_number` vs `custrecord_sps_track_num`
+- `customrecord_shipping_account_list` vs `customtransaction_shipping_account_list`
+- Sublist names: `'item'` vs `'line'`
+
 ## Repository Management Best Practices
 
 ### Adding New Scripts

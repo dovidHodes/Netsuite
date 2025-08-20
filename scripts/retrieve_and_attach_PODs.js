@@ -18,31 +18,18 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
      */
     function createEDIErrorRecord(recordId, errorMessage, tradingPartnerId) {
         try {
-            // Get the ASN field value from the package record
-            const packageRecord = record.load({
-                type: 'customrecord_sps_package',
-                id: recordId
-            });
-            
-            const asnValue = packageRecord.getValue('custrecord_sps_pack_asn');
-            
-            if (!asnValue) {
-                log.error('EDI Error Record Error', `No ASN value found for package ${recordId}`);
-                return;
-            }
-            
             const ediErrorRecord = record.create({
                 type: 'customrecord_edi_error'
             });
             
             ediErrorRecord.setValue({
-                fieldId: 'custrecord_edi_error_record',
-                value: asnValue
+                fieldId: 'custrecord236', //package record field
+                value: recordId
             });
             
             ediErrorRecord.setValue({
                 fieldId: 'custrecord233', // Action field
-                value: 8
+                value: 9 // Get POD action
             });
             
             ediErrorRecord.setValue({
@@ -63,7 +50,7 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
             }
             
             const ediErrorId = ediErrorRecord.save();
-            log.audit('EDI Error Record Created', `EDI Error ID: ${ediErrorId} for Package: ${recordId}, ASN: ${asnValue}`);
+            log.audit('EDI Error Record Created', `EDI Error ID: ${ediErrorId} for Package: ${recordId}`);
             
         } catch (error) {
             log.error('Error creating EDI error record', `Package ID: ${recordId}, Error: ${error.message}`);
@@ -82,7 +69,24 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
             
             const recordId = context.request.parameters.recordId;
             if (recordId) {
+                // Create safety error record for any unhandled errors
                 createEDIErrorRecord(recordId, 'Suitelet Error: ' + error.message);
+                
+                // Update package record with error status as safety net
+                try {
+                    record.submitFields({
+                        type: 'customrecord_sps_package',
+                        id: recordId,
+                        values: {
+                            'custrecord_pod_status': 4,
+                            'custrecord_pod_message': `Suitelet Error: ${error.message}`
+                        }
+                    });
+                    log.audit('Suitelet Error', 'Package record error status updated');
+                } catch (updateError) {
+                    log.error('Failed to update package record with suitelet error status', updateError);
+                }
+                
                 redirectToRecord(context, recordId, 'Error: ' + error.message);
             } else {
                 context.response.write('Error: ' + error.message);
@@ -155,7 +159,7 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
             log.audit('UPS POD Suitelet', 'Package record UPS not available status updated');
             
             // Create EDI error record for UPS not available
-            createEDIErrorRecord(recordId, 'UPS POD retrieval not yet available. This feature will be implemented in a future update.');
+            //createEDIErrorRecord(recordId, 'UPS POD retrieval not yet available. This feature will be implemented in a future update.');
             
             return {
                 success: false,
@@ -316,7 +320,7 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
             
             // Load the mapping record
             const mappingRecord = record.load({
-                type: 'customrecord_shipping_account_list',
+                type: 'customtransaction_shipping_account_list',
                 id: mappingRecordId
             });
             
@@ -341,7 +345,6 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
                 
                 if (facilityNumber && accountNumber) {
                     facilityToAccountMap[facilityNumber] = accountNumber;
-                    log.audit('Account Mapping', `Mapped facility ${facilityNumber} to account ${accountNumber}`);
                 }
             }
             
@@ -359,7 +362,7 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
             
         } catch (error) {
             log.error('Account Mapping Error', error);
-            // Create EDI error record for account mapping error
+            // Create EDI error record for account mapping error - return the actual error
             createEDIErrorRecord(recordId, `Account Mapping Error: ${error.message}`);
             return null;
         }
@@ -383,7 +386,14 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
             if (!fedexApiKey || !fedexSecretKey) {
                 const errorMsg = 'FedEx API credentials not found. Please check script parameters.';
                 createEDIErrorRecord(recordId, errorMsg);
-                throw new Error(errorMsg);
+                return {
+                    success: false,
+                    error: errorMsg,
+                    carrier: 'FEDEX',
+                    trackingNumber: trackingNumber,
+                    recordId: recordId,
+                    timestamp: new Date().toISOString()
+                };
             }
             
             // Get access token first
@@ -413,7 +423,14 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
                  log.error('Token Response Body', tokenResponse.body);
                  const errorMsg = `Failed to parse token response: ${parseError.message}. Response: ${tokenResponse.body.substring(0, 200)}...`;
                  createEDIErrorRecord(recordId, errorMsg);
-                 throw new Error(errorMsg);
+                 return {
+                     success: false,
+                     error: errorMsg,
+                     carrier: 'FEDEX',
+                     trackingNumber: trackingNumber,
+                     recordId: recordId,
+                     timestamp: new Date().toISOString()
+                 };
              }
              
              // Check for FedEx API errors in token response
@@ -421,13 +438,27 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
                  const error = tokenData.errors[0];
                  const errorMsg = `${error.code}: ${error.message}`;
                  createEDIErrorRecord(recordId, `FedEx Token Error: ${errorMsg}`);
-                 throw new Error(errorMsg);
+                 return {
+                     success: false,
+                     error: errorMsg,
+                     carrier: 'FEDEX',
+                     trackingNumber: trackingNumber,
+                     recordId: recordId,
+                     timestamp: new Date().toISOString()
+                 };
              }
              
              if (!tokenData.access_token) {
                  const errorMsg = 'Failed to get FedEx access token: ' + JSON.stringify(tokenData);
                  createEDIErrorRecord(recordId, `FedEx Token Error: ${errorMsg}`);
-                 throw new Error(errorMsg);
+                 return {
+                     success: false,
+                     error: errorMsg,
+                     carrier: 'FEDEX',
+                     trackingNumber: trackingNumber,
+                     recordId: recordId,
+                     timestamp: new Date().toISOString()
+                 };
              }
 
             log.audit('FedEx POD Suitelet', 'Token obtained, requesting POD document...');
@@ -448,9 +479,15 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
             const accountNumber = getAccountNumberFromMapping(walmartDcNumber, recordId);
             
             if (!accountNumber) {
-                const errorMsg = `No account number found for Walmart DC ${walmartDcNumber}. Please check the account mapping record.`;
-                createEDIErrorRecord(recordId, errorMsg);
-                throw new Error(errorMsg);
+                // Don't create another error record - getAccountNumberFromMapping already created one
+                return {
+                    success: false,
+                    error: `Account mapping failed for Walmart DC ${walmartDcNumber}`,
+                    carrier: 'FEDEX',
+                    trackingNumber: trackingNumber,
+                    recordId: recordId,
+                    timestamp: new Date().toISOString()
+                };
             }
             
             log.audit('FedEx POD Suitelet', `Using account number: ${accountNumber}`);
@@ -498,8 +535,15 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
                  log.error('POD Response Parse Error', parseError.message);
                  log.error('POD Response Body', podResponse.body);
                  const errorMsg = `Failed to parse POD response: ${parseError.message}. Response: ${podResponse.body.substring(0, 200)}...`;
-                 createEDIErrorRecord(recordId, `FedEx POD Parse Error: ${errorMsg}`);
-                 throw new Error(errorMsg);
+                 createEDIErrorRecord(recordId, errorMsg);
+                 return {
+                     success: false,
+                     error: errorMsg,
+                     carrier: 'FEDEX',
+                     trackingNumber: trackingNumber,
+                     recordId: recordId,
+                     timestamp: new Date().toISOString()
+                 };
              }
              
                            // Check for FedEx API errors first
@@ -507,14 +551,28 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
                   const error = podData.errors[0];
                   const errorMsg = `${error.code}: ${error.message}`;
                   createEDIErrorRecord(recordId, `FedEx POD API Error: ${errorMsg}`);
-                  throw new Error(errorMsg);
+                  return {
+                      success: false,
+                      error: errorMsg,
+                      carrier: 'FEDEX',
+                      trackingNumber: trackingNumber,
+                      recordId: recordId,
+                      timestamp: new Date().toISOString()
+                  };
               }
               
               // Extract base64 data from the response
               if (!podData.output || !podData.output.documents || !podData.output.documents[0]) {
                   const errorMsg = 'No document found in FedEx response: ' + JSON.stringify(podData);
                   createEDIErrorRecord(recordId, `FedEx POD Error: ${errorMsg}`);
-                  throw new Error(errorMsg);
+                  return {
+                      success: false,
+                      error: errorMsg,
+                      carrier: 'FEDEX',
+                      trackingNumber: trackingNumber,
+                      recordId: recordId,
+                      timestamp: new Date().toISOString()
+                  };
               }
              
              const base64Data = podData.output.documents[0];
@@ -552,9 +610,6 @@ define(['N/https', 'N/encode', 'N/runtime', 'N/record', 'N/file', 'N/url'],
 
                  } catch (error) {
              log.error('FedEx POD Suitelet Error', error);
-             
-             // Create EDI error record for FedEx error
-             createEDIErrorRecord(recordId, `FedEx API error: ${error.message}`);
              
              // Update package record with error status and message using submitFields for better performance
              try {

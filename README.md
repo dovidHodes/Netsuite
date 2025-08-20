@@ -10,7 +10,8 @@ NetSuite automation scripts and utilities for EDI processing and invoice managem
 ├── EDI_Error_Record_Reference.md       # EDI error record structure reference
 └── scripts/                            # NetSuite scripts folder
     ├── setInvoiceAsReadyToSend.js      # Auto-approve invoices for EDI transmission
-    └── setIFasReadyToSend.js           # Set Item Fulfillments as ready to send
+    ├── setIFasReadyToSend.js           # Set Item Fulfillments as ready to send
+    └── retrieve_and_attach_PODs.js     # Automated FedEx POD document retrieval and attachment
 ```
 
 ## Scripts
@@ -26,6 +27,15 @@ Scheduled script that automatically approves Item Fulfillments for EDI transmiss
 
 #### Custom Logic
 • Menards (entity 545): Sets ASN status to 16 when PO Type is 'DR'
+
+### retrieve_and_attach_PODs.js
+Suitelet for automated FedEx POD (Proof of Delivery) document retrieval and attachment to package records. Processes tracking numbers through the FedEx API to fetch POD documents and automatically attaches them to the corresponding NetSuite package records. Includes comprehensive error handling with EDI error record creation and dynamic account number mapping based on Walmart DC numbers.
+
+#### Custom Logic
+• Dynamic date range based on package creation date (start date = creation date, end date = creation date + 1 month)
+• Walmart DC number validation (must be exactly 4 digits)
+• Account number mapping from Walmart DC number to FedEx account number via custom transaction record
+• Comprehensive EDI error record creation with action internal ID 9 for all error scenarios
 
 ## Documentation
 

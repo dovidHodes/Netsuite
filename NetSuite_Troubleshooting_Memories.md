@@ -119,6 +119,109 @@ if (invoiceId) throw new Error('Test main processing error');
 - Field ID patterns
 - Debugging techniques
 
+## POD Retrieval Patterns
+
+### FedEx API Integration
+**Pattern**: OAuth token flow followed by document retrieval
+```javascript
+// Get access token first
+const tokenResponse = https.post({
+    url: 'https://apis.fedex.com/oauth/token',
+    headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-locale': 'en_US'
+    },
+    body: tokenRequestBody
+});
+
+// Use token for document request
+const podResponse = https.post({
+    url: 'https://apis.fedex.com/track/v1/trackingdocuments',
+    headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`,
+        'Content-Type': 'application/json',
+        'X-locale': 'en_US'
+    },
+    body: JSON.stringify(requestBody)
+});
+```
+
+### Dynamic Date Range Generation
+**Pattern**: Use record creation date as start, add one month for end
+```javascript
+const startDate = new Date(createdDate);
+const endDate = new Date(startDate);
+endDate.setMonth(endDate.getMonth() + 1);
+
+const formatDate = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+```
+
+### Account Number Mapping
+**Pattern**: Build map from custom transaction record lines
+```javascript
+const facilityToAccountMap = {};
+const lineCount = mappingRecord.getLineCount({sublistId: 'line'});
+
+for (let i = 0; i < lineCount; i++) {
+    const facilityNumber = mappingRecord.getSublistValue({
+        sublistId: 'line',
+        fieldId: 'custcol_wm_facility_number',
+        line: i
+    });
+    
+    const accountNumber = mappingRecord.getSublistValue({
+        sublistId: 'line',
+        fieldId: 'custcol_account_number',
+        line: i
+    });
+    
+    if (facilityNumber && accountNumber) {
+        facilityToAccountMap[facilityNumber] = accountNumber;
+    }
+}
+```
+
+### File Attachment from Base64
+**Pattern**: Create file from base64 and attach to record
+```javascript
+const fileObj = file.create({
+    name: fileName,
+    fileType: file.Type.PDF,
+    contents: base64Data,
+    encoding: file.Encoding.BASE_64,
+    folder: 7459
+});
+
+const fileId = fileObj.save();
+
+record.attach({
+    record: {
+        type: 'file',
+        id: fileId
+    },
+    to: {
+        type: 'customrecord_sps_package',
+        id: recordId
+    }
+});
+```
+
+### EDI Error Record with ASN Reference
+**Pattern**: Use ASN field value instead of record ID for EDI error records
+```javascript
+const asnValue = packageRecord.getValue('custrecord_sps_pack_asn');
+
+ediErrorRecord.setValue({
+    fieldId: 'custrecord_edi_error_record',
+    value: asnValue
+});
+```
+
 ## Repository Management Best Practices
 
 ### Adding New Scripts
@@ -139,4 +242,4 @@ Brief description of what the script does.
 
 ---
 *Last Updated: [Current Date]*
-*Project: setInvoiceAsReadyToSend.js* 
+*Project: retrieve_and_attach_PODs.js* 
